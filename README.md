@@ -30,7 +30,7 @@
 
 1.  **注册/登录** [Cloudflare Dashboard](https://dash.cloudflare.com/)。
 2.  在左侧菜单选择 **Workers & Pages** -> **Overview** -> **Create Application** -> **Create Worker**。
-3.  给 Worker 起个名字（例如 `my-dashboard`），点击 **Deploy**。
+3.  给 Worker 起个名字（例如 `xxx-worker`），点击 **Deploy**。
 4.  点击 **Edit code** 进入在线编辑器。
 5.  将本项目中的 [worker.js](worker.js) 的全部代码复制并粘贴覆盖编辑器中的内容。
 6.  **⚠️ 重要：修改配置信息**（详见下文）。
