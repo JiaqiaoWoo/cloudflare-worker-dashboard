@@ -92,7 +92,7 @@ Cloudflare 控制台 → **Storage & Databases → KV** → Create a namespace
 crypto.getRandomValues(new Uint8Array(32))
 ```
 ## 一键部署
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/loLollipop/cloudflare-worker-dashboard)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/loLollipop/cloudflare-worker-dashboard.git)
 
 ## ✅ 部署上线
 
