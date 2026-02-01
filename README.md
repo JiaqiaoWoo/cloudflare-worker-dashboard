@@ -12,7 +12,7 @@
 
 > **Demo / 预览**
 >
-> ![Dashboard Preview](screenshots/preview.png)
+> ![Dashboard Preview](screenshots/image.png)
 
 ---
 
