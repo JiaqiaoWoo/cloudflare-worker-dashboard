@@ -86,7 +86,7 @@ Cloudflare 控制台 → **Storage & Databases → KV** → Create a namespace
 - Name: `SESSION_SECRET`
 - Value: 随便一串强随机（建议 32+ 位）
 
-你可以用任意方式生成；比如直接在浏览器控制台生成也行：
+不配置也能用，系统会自动生成并写入 KV
 
 ```js
 crypto.getRandomValues(new Uint8Array(32))
