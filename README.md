@@ -90,6 +90,7 @@ Cloudflare 控制台 → **Storage & Databases → KV** → Create a namespace
 
 ```js
 crypto.getRandomValues(new Uint8Array(32))
+```
 
 ✅ 部署上线
 
