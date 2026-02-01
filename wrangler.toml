@@ -1,0 +1,11 @@
+name = "nebula"
+main = "worker.js"
+compatibility_date = "2026-02-01"
+
+[[kv_namespaces]]
+binding = "LINKS"
+id = "00000000000000000000000000000000"
+
+[[kv_namespaces]]
+binding = "AUTH"
+id = "00000000000000000000000000000000"
