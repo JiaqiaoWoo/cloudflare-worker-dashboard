@@ -92,14 +92,14 @@ Cloudflare 控制台 → **Storage & Databases → KV** → Create a namespace
 crypto.getRandomValues(new Uint8Array(32))
 ```
 
-✅ 部署上线
+## ✅ 部署上线
 
 完成以上配置后，回到在线编辑器右上角点击 Deploy。
 
 访问你的 Worker 地址即可使用。
 
 
-🔑 默认账号密码（首次）
+## 🔑 默认账号密码（首次）
 
 用户名：admin
 
@@ -108,7 +108,7 @@ crypto.getRandomValues(new Uint8Array(32))
 首次登录会强制进入“修改密码”页面，修改后才会进入控制台。
 
 
-🧭 使用指南（部署后怎么玩）
+## 🧭 使用指南（部署后怎么玩）
 
 添加链接：右下角 ➕
 
@@ -129,7 +129,7 @@ crypto.getRandomValues(new Uint8Array(32))
 亮/暗切换：右上角 🌙/☀️
 
 
-📁 项目结构
+## 📁 项目结构
 ```
 .
 ├─ worker.js                 # Worker 主文件（部署复制这一个就行）
@@ -137,7 +137,7 @@ crypto.getRandomValues(new Uint8Array(32))
    └─ preview.png            # 预览图（可选）
 ```
 
-🛡️ 安全说明
+## 🛡️ 安全说明
 
 密码不会写在代码里；修改后以 SHA-256 哈希保存到 AUTH KV
 
@@ -145,6 +145,6 @@ Session 使用 SESSION_SECRET 做 HMAC 签名，避免伪造
 
 Cookie 设置 HttpOnly + SameSite=Lax + Secure
 
-📄 License
+## 📄 License
 
 MIT
