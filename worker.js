@@ -23,6 +23,7 @@ const COOKIE_MAX_AGE = 86400;
 
 const LINKS_KEY = "nebula_links_v1";
 const AUTH_KEY = "nebula_auth_v1";
+const SESSION_SECRET_FALLBACK_KEY = "nebula_session_secret_v1"; 
 
 const DEFAULT_USER = "admin";
 const DEFAULT_PASS = "admin123456";
@@ -396,7 +397,8 @@ async function signSession(env, user, mustChange) {
     n: uid(),
   });
   const payloadB64 = b64(payload);
-  const sig = await hmacSha256(env.SESSION_SECRET, payloadB64);
+  const secret = await getSessionSecret(env);          
+  const sig = await hmacSha256(secret, payloadB64);      
   return `${payloadB64}.${b64(sig)}`;
 }
 
@@ -405,7 +407,8 @@ async function verifySession(env, token) {
     const [payloadB64, sigB64] = token.split(".");
     if (!payloadB64 || !sigB64) return { ok: false };
 
-    const expected = await hmacSha256(env.SESSION_SECRET, payloadB64);
+    const secret = await getSessionSecret(env);         
+    const expected = await hmacSha256(secret, payloadB64); 
     const got = unb64(sigB64);
     if (!timingSafeEqual(expected, got)) return { ok: false };
 
@@ -442,6 +445,28 @@ function timingSafeEqual(a, b) {
   let out = 0;
   for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return out === 0;
+}
+
+function randomHex(bytes = 32) {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return [...arr].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function getSessionSecret(env) {
+  // 1) 如果用户在 Cloudflare 里配置了 Secret，就优先用（方便高级用户自定义）
+  if (env.SESSION_SECRET && String(env.SESSION_SECRET).trim()) {
+    return String(env.SESSION_SECRET).trim();
+  }
+
+  // 2) 否则从 AUTH KV 里取（懒人模式）
+  const existing = await env.AUTH.get(SESSION_SECRET_FALLBACK_KEY);
+  if (existing && existing.trim()) return existing.trim();
+
+  // 3) 没有就生成一个并写入（只会发生一次）
+  const generated = randomHex(32); // 64 hex chars
+  await env.AUTH.put(SESSION_SECRET_FALLBACK_KEY, generated);
+  return generated;
 }
 
 /* ---------------- HTTP helpers ---------------- */
