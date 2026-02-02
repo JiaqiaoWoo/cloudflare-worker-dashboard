@@ -1,12 +1,12 @@
 /**
- * NEBULA - Universal Cloudflare Worker Dashboard (Template)
+ * NEBULA - Universal Cloudflare Worker Dashboard (Template) - Enhanced UI + Category Delete
  *
  * - First login default: admin / admin123456 (forced change password)
  * - Data stored in KV (LINKS): categories & links
  * - UI:
  *   - Google search bar
  *   - Mouse wheel to switch categories
- *   - Category manager: drag-sort + rename
+ *   - Category manager: drag-sort + rename + delete (move links)
  *   - Links: drag-sort + cross-category move
  *   - Add/Edit/Delete links (auto favicon)
  *   - Light/Dark toggle (localStorage), default follow system
@@ -14,7 +14,7 @@
  * Required KV bindings:
  *   - LINKS
  *   - AUTH
- * Required secret:
+ * Required secret (optional, will auto-generate if missing):
  *   - SESSION_SECRET
  */
 
@@ -23,7 +23,7 @@ const COOKIE_MAX_AGE = 86400;
 
 const LINKS_KEY = "nebula_links_v1";
 const AUTH_KEY = "nebula_auth_v1";
-const SESSION_SECRET_FALLBACK_KEY = "nebula_session_secret_v1"; 
+const SESSION_SECRET_FALLBACK_KEY = "nebula_session_secret_v1";
 
 const DEFAULT_USER = "admin";
 const DEFAULT_PASS = "admin123456";
@@ -225,6 +225,37 @@ export default {
         return json({ ok: true, data }, 200);
       }
 
+      // ✅ delete category (move links to another category, keep at least 1 category)
+      if (url.pathname === "/api/categories/delete" && request.method === "POST") {
+        const body = await safeJson(request);
+        const categoryId = String(body?.categoryId || "");
+        const moveToCategoryId = String(body?.moveToCategoryId || "");
+
+        if (!categoryId) return json({ error: "categoryId required" }, 400);
+
+        const data = await loadLinks(env);
+        const idx = data.categories.findIndex((c) => c.id === categoryId);
+        if (idx < 0) return json({ error: "not found" }, 404);
+
+        if (data.categories.length <= 1) return json({ error: "至少保留 1 个分类" }, 400);
+
+        const removed = data.categories[idx];
+
+        let target = null;
+        if (moveToCategoryId && moveToCategoryId !== categoryId) {
+          target = data.categories.find((c) => c.id === moveToCategoryId) || null;
+        }
+        if (!target) {
+          target = data.categories.find((c) => c.id !== categoryId) || data.categories[0];
+        }
+
+        target.links.push(...(removed.links || []));
+        data.categories.splice(idx, 1);
+
+        await env.LINKS.put(LINKS_KEY, JSON.stringify(data, null, 2));
+        return json({ ok: true, data }, 200);
+      }
+
       return json({ error: "Not found" }, 404);
     }
 
@@ -248,7 +279,7 @@ async function loadLinks(env) {
     } catch {}
   }
 
-  // ✅ Empty template: only one empty category, no links
+  // Empty template: only one empty category, no links
   const seed = {
     categories: [
       {
@@ -397,8 +428,8 @@ async function signSession(env, user, mustChange) {
     n: uid(),
   });
   const payloadB64 = b64(payload);
-  const secret = await getSessionSecret(env);          
-  const sig = await hmacSha256(secret, payloadB64);      
+  const secret = await getSessionSecret(env);
+  const sig = await hmacSha256(secret, payloadB64);
   return `${payloadB64}.${b64(sig)}`;
 }
 
@@ -407,8 +438,8 @@ async function verifySession(env, token) {
     const [payloadB64, sigB64] = token.split(".");
     if (!payloadB64 || !sigB64) return { ok: false };
 
-    const secret = await getSessionSecret(env);         
-    const expected = await hmacSha256(secret, payloadB64); 
+    const secret = await getSessionSecret(env);
+    const expected = await hmacSha256(secret, payloadB64);
     const got = unb64(sigB64);
     if (!timingSafeEqual(expected, got)) return { ok: false };
 
@@ -450,21 +481,17 @@ function timingSafeEqual(a, b) {
 function randomHex(bytes = 32) {
   const arr = new Uint8Array(bytes);
   crypto.getRandomValues(arr);
-  return [...arr].map(b => b.toString(16).padStart(2, "0")).join("");
+  return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function getSessionSecret(env) {
-  // 1) 如果用户在 Cloudflare 里配置了 Secret，就优先用（方便高级用户自定义）
   if (env.SESSION_SECRET && String(env.SESSION_SECRET).trim()) {
     return String(env.SESSION_SECRET).trim();
   }
-
-  // 2) 否则从 AUTH KV 里取（懒人模式）
   const existing = await env.AUTH.get(SESSION_SECRET_FALLBACK_KEY);
   if (existing && existing.trim()) return existing.trim();
 
-  // 3) 没有就生成一个并写入（只会发生一次）
-  const generated = randomHex(32); // 64 hex chars
+  const generated = randomHex(32);
   await env.AUTH.put(SESSION_SECRET_FALLBACK_KEY, generated);
   return generated;
 }
@@ -499,6 +526,7 @@ function isValidHttpUrl(s) {
 /* ---------------- Pages ---------------- */
 
 function renderLoginPage() {
+  // 你原本的登录页已经挺 ok，保留
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -572,6 +600,7 @@ function renderLoginPage() {
 }
 
 function renderChangePasswordPage() {
+  // 保留你原本的改密码页
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -661,43 +690,50 @@ function renderDashboardPage(data) {
   <title>NEBULA</title>
   <style>
     :root{
-      --topbar-h: 140px;
-      --gap: 20px;
+      --topbar-h: 144px;
+      --gap: 18px;
 
+      /* DARK: 深蓝基底 + 青绿/蓝点缀（更耐看，告别“满屏紫”） */
       --bg0: #070A14;
-      --bg1: #0B1230;
-      --bg2: #121A3B;
+      --bg1: #0A1230;
 
-      --panel: rgba(18, 26, 59, .62);
-      --panel2: rgba(10, 16, 40, .55);
-      --border: rgba(234, 240, 255, .12);
+      --panel: rgba(255,255,255,.06);
+      --panel2: rgba(255,255,255,.04);
+      --border: rgba(255,255,255,.10);
 
-      --text: #EAF0FF;
-      --muted: rgba(234, 240, 255, .62);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.55);
 
-      --primary: #7C3AED;
-      --primary2:#4F46E5;
+      --primary: #2DD4BF;      /* teal */
+      --primary2:#60A5FA;      /* blue */
+      --danger:  #FB7185;      /* rose */
 
-      --shadow: 0 18px 60px rgba(0,0,0,.45);
-      --glow: 0 0 0 3px rgba(124, 58, 237, .14);
+      --shadow: 0 18px 60px rgba(0,0,0,.35);
+      --glow: 0 0 0 3px rgba(45, 212, 191, .14);
+
+      --radius: 18px;
     }
+
     :root[data-theme="light"]{
-      --bg0: #F6F7FF;
-      --bg1: #EEF1FF;
-      --bg2: #E9ECFF;
+      /* LIGHT: 乳白 + 天空蓝/绿色点缀 */
+      --bg0: #F7FAFF;
+      --bg1: #EEF5FF;
 
-      --panel: rgba(255,255,255,.72);
-      --panel2: rgba(255,255,255,.58);
-      --border: rgba(15,23,42,.12);
+      --panel: rgba(255,255,255,.78);
+      --panel2: rgba(255,255,255,.60);
+      --border: rgba(15,23,42,.10);
 
-      --text: #0B1226;
-      --muted: rgba(11, 18, 38, .58);
+      --text: rgba(10, 16, 32, .92);
+      --muted: rgba(10,16,32,.52);
 
-      --primary:#6D28D9;
-      --primary2:#2563EB;
+      --primary: #0EA5E9;  /* sky */
+      --primary2:#22C55E;  /* green */
+      --danger:  #F43F5E;
 
-      --shadow: 0 18px 60px rgba(15,23,42,.10);
-      --glow: 0 0 0 3px rgba(109, 40, 217, .12);
+      --shadow: 0 18px 55px rgba(2,6,23,.10);
+      --glow: 0 0 0 3px rgba(14,165,233,.14);
+
+      --radius: 18px;
     }
 
     *{margin:0;padding:0;box-sizing:border-box}
@@ -706,27 +742,55 @@ function renderDashboardPage(data) {
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
       color: var(--text);
       background:
-        radial-gradient(1200px 800px at 20% 10%, var(--bg2), transparent 60%),
-        radial-gradient(1100px 900px at 90% 80%, rgba(124,58,237,.22), transparent 55%),
+        radial-gradient(900px 600px at 16% 18%, rgba(45,212,191,.24), transparent 58%),
+        radial-gradient(900px 700px at 82% 78%, rgba(96,165,250,.22), transparent 58%),
         linear-gradient(135deg, var(--bg0), var(--bg1));
+      position:relative;
     }
+
+    /* 微噪点 + 柔光，让玻璃更高级 */
     body::before{
       content:"";
-      position:fixed;inset:0;
+      position:fixed; inset:0;
       pointer-events:none;
       background:
-        radial-gradient(circle at 18% 40%, rgba(79,70,229,.18), transparent 55%),
-        radial-gradient(circle at 82% 78%, rgba(124,58,237,.16), transparent 58%);
+        radial-gradient(circle at 22% 30%, rgba(255,255,255,.06), transparent 42%),
+        radial-gradient(circle at 76% 72%, rgba(255,255,255,.05), transparent 45%),
+        repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0px, rgba(255,255,255,.02) 1px, transparent 1px, transparent 3px);
+      mix-blend-mode: overlay;
+      opacity:.55;
+      filter: blur(.2px);
+    }
+
+    /* 漂浮光团 */
+    .blob{
+      position:fixed; width:520px; height:520px; border-radius:999px;
+      filter: blur(70px);
+      opacity:.22;
+      pointer-events:none;
+      transform: translate3d(0,0,0);
+      animation: floaty 12s ease-in-out infinite;
+      z-index:0;
+    }
+    .blob.b1{ left:-140px; top:120px; background: radial-gradient(circle at 30% 30%, rgba(45,212,191,.9), transparent 60%); }
+    .blob.b2{ right:-180px; bottom:40px; background: radial-gradient(circle at 40% 40%, rgba(96,165,250,.9), transparent 60%); animation-duration: 14s; }
+    @keyframes floaty{
+      0%,100%{ transform: translateY(0) translateX(0) scale(1); }
+      50%{ transform: translateY(-22px) translateX(18px) scale(1.04); }
     }
 
     .topbar{
       position:fixed;left:0;right:0;top:0;z-index:20;
       padding:18px 18px 14px;
-      backdrop-filter: blur(16px);
-      background: linear-gradient(180deg, var(--panel), rgba(0,0,0,0));
+      backdrop-filter: blur(18px);
+      background: linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,0));
       border-bottom: 1px solid var(--border);
     }
-    .container{max-width:1200px;margin:0 auto}
+    :root[data-theme="light"] .topbar{
+      background: linear-gradient(180deg, rgba(255,255,255,.72), rgba(255,255,255,0));
+    }
+
+    .container{max-width:1240px;margin:0 auto; position:relative; z-index:2;}
 
     .header{
       display:grid;
@@ -737,51 +801,59 @@ function renderDashboardPage(data) {
     }
     .brand{grid-column:2;text-align:center}
     .brand h1{
-      font-size:1.8rem;font-weight:950;letter-spacing:.08em;line-height:1;
-      background:linear-gradient(135deg, var(--text), rgba(199,210,254,.9));
-      -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+      font-size:1.9rem;font-weight:980;letter-spacing:.12em;line-height:1;
       user-select:none;
-    }
-    :root[data-theme="light"] .brand h1{
-      background:linear-gradient(135deg, #111827, rgba(109,40,217,.95));
+      background: linear-gradient(90deg, var(--text), rgba(45,212,191,.95), rgba(96,165,250,.95));
       -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+      text-shadow: 0 10px 30px rgba(0,0,0,.18);
     }
 
     .actions{
       grid-column:3;justify-self:end;
       display:flex;align-items:center;gap:10px;flex-wrap:wrap;
     }
+
     .pill{
       border:1px solid var(--border);
       background: var(--panel);
       color: var(--text);
-      padding:10px 12px;border-radius:999px;text-decoration:none;font-size:.9rem;font-weight:950;
+      padding:10px 12px;border-radius:999px;text-decoration:none;font-size:.92rem;font-weight:950;
       transition:.18s;display:inline-flex;align-items:center;gap:8px;cursor:pointer;
-      box-shadow: 0 10px 30px rgba(0,0,0,.10);
+      box-shadow: 0 10px 28px rgba(0,0,0,.10);
     }
-    .pill:hover{transform:translateY(-1px);border-color:rgba(124,58,237,.35)}
-    .pill.danger:hover{border-color:rgba(248,113,113,.55);color:#ef4444}
+    .pill:hover{transform:translateY(-1px); border-color: rgba(45,212,191,.34);}
+    .pill.danger:hover{border-color: rgba(251,113,133,.45); color: var(--danger);}
 
     .searchbar{
       display:flex;gap:10px;align-items:center;
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius:16px;padding:12px;
+      border-radius: var(--radius);
+      padding:12px;
       box-shadow: var(--shadow);
     }
     .searchbar input{
-      flex:1;padding:12px 14px;border-radius:12px;
+      flex:1;padding:12px 14px;border-radius:14px;
       border:1px solid var(--border);
       background: var(--panel2);
       color: var(--text);
       font-size:1rem;outline:none;
+      transition: .18s;
     }
-    .searchbar input:focus{box-shadow: var(--glow); border-color: rgba(124,58,237,.55);}
+    .searchbar input:focus{
+      box-shadow: var(--glow);
+      border-color: rgba(45,212,191,.45);
+    }
     .searchbar button{
-      padding:12px 14px;border:none;border-radius:12px;cursor:pointer;font-weight:950;color:#fff;
-      background: linear-gradient(135deg, var(--primary), var(--primary2));
-      box-shadow: 0 10px 30px rgba(124,58,237,.22);
+      padding:12px 16px;border:none;border-radius:14px;cursor:pointer;font-weight:980;color:#021018;
+      background: linear-gradient(135deg, rgba(45,212,191,.95), rgba(96,165,250,.95));
+      box-shadow: 0 14px 34px rgba(45,212,191,.16);
       transition:.18s;white-space:nowrap;
+    }
+    :root[data-theme="light"] .searchbar button{ color:#062034; }
+    .searchbar button:hover{
+      transform:translateY(-1px);
+      box-shadow: 0 18px 45px rgba(45,212,191,.22);
     }
 
     .viewport{
@@ -790,119 +862,266 @@ function renderDashboardPage(data) {
       bottom:0;
       padding: 0 18px 22px;
       overflow:hidden;
+      z-index:1;
     }
     .sections{height:100%;transition:transform 520ms cubic-bezier(.2,.8,.2,1);will-change:transform}
     .section{
       height: calc(100vh - var(--topbar-h) - var(--gap));
-      max-width:1200px;margin:0 auto;
+      max-width:1240px;margin:0 auto;
       padding: 10px 0 40px;
     }
+
     .section-title{
-      font-size:1.14rem;color: var(--text);font-weight:950;
-      margin:10px 0 14px;padding-left:1rem;border-left:4px solid var(--primary);
+      font-size:1.08rem;
+      color: var(--text);
+      font-weight:980;
+      margin:10px 0 14px;
+      padding-left:1rem;
+      border-left:4px solid rgba(45,212,191,.9);
       display:flex;align-items:center;justify-content:space-between;
+      letter-spacing:.02em;
     }
 
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1.1rem}
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+      gap:1.05rem
+    }
+
     .card{
       position:relative;
       background: var(--panel);
-      backdrop-filter:blur(12px);
+      backdrop-filter:blur(16px);
       border:1px solid var(--border);
-      border-radius:16px;
-      padding:1.2rem 1.1rem;
+      border-radius: 18px;
+      padding:1.15rem 1.05rem;
       text-decoration:none;color: var(--text);
-      transition:.22s cubic-bezier(.4,0,.2,1);
+      transition:.20s cubic-bezier(.4,0,.2,1);
       display:flex;align-items:center;gap:12px;
       min-height:76px;
-      box-shadow: 0 10px 30px rgba(0,0,0,.10);
+      box-shadow: 0 10px 28px rgba(0,0,0,.10);
+      overflow:hidden;
     }
+    .card::before{
+      content:"";
+      position:absolute; left:0; right:0; top:0; height:2px;
+      background: linear-gradient(90deg, rgba(45,212,191,.95), rgba(96,165,250,.95));
+      opacity:.0;
+      transform: translateX(-30%);
+      transition: .22s;
+    }
+    .card:hover::before{ opacity: 1; transform: translateX(0); }
+    .card::after{
+      content:"";
+      position:absolute; inset:-40px;
+      background: radial-gradient(circle at 30% 20%, rgba(45,212,191,.16), transparent 45%),
+                  radial-gradient(circle at 80% 90%, rgba(96,165,250,.14), transparent 55%);
+      opacity:0;
+      transition:.22s;
+      pointer-events:none;
+    }
+    .card:hover::after{ opacity:1; }
     .card:hover{
       transform:translateY(-6px);
-      border-color: rgba(124,58,237,.35);
-      box-shadow: 0 18px 60px rgba(124,58,237,.12);
+      border-color: rgba(45,212,191,.26);
+      box-shadow: 0 20px 70px rgba(0,0,0,.20);
     }
+
     .favicon{
-      width:40px;height:40px;border-radius:12px;
-      background: var(--panel2);
+      width:42px;height:42px;border-radius:14px;
+      background: rgba(255,255,255,.06);
       border:1px solid var(--border);
       display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto;
     }
+    :root[data-theme="light"] .favicon{ background: rgba(2,6,23,.04); }
     .favicon img{width:22px;height:22px;display:block}
 
-    .meta{display:flex;flex-direction:column;gap:3px;min-width:0}
-    .title{font-weight:950;color:var(--text);font-size:1.02rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .meta{display:flex;flex-direction:column;gap:4px;min-width:0}
+    .title{font-weight:980;color:var(--text);font-size:1.03rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .url{color:var(--muted);font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+    .dragging{opacity:.55;transform:scale(.98)}
+    .drop-hint{outline:2px dashed rgba(45,212,191,.32);outline-offset:6px;border-radius:18px}
 
     .tools{
       position:absolute;right:10px;top:10px;display:flex;gap:6px;opacity:0;transform:translateY(-2px);
       transition:.15s;
+      z-index:2;
     }
     .card:hover .tools{opacity:1;transform:translateY(0)}
     .mini{
-      width:30px;height:30px;border-radius:10px;
+      width:30px;height:30px;border-radius:12px;
       border:1px solid var(--border);
-      background: var(--panel2);
+      background: rgba(255,255,255,.06);
       color: var(--text);
-      cursor:pointer;font-weight:950;
-      display:flex;align-items:center;justify-content:center;
+      cursor:pointer;font-weight:980;
+      display:flex;align-items:center;justify-content:center;transition:.15s;
     }
-    .mini.d:hover{border-color:rgba(248,113,113,.55);color:#ef4444}
+    :root[data-theme="light"] .mini{ background: rgba(2,6,23,.04); }
+    .mini:hover{border-color:rgba(45,212,191,.30)}
+    .mini.d:hover{border-color:rgba(251,113,133,.45);color:var(--danger)}
 
-    .dragging{opacity:.55;transform:scale(.98)}
     .dots{
-      position:fixed;right:14px;top:50%;transform:translateY(-50%);
-      display:flex;flex-direction:column;gap:10px;z-index:25;user-select:none
+      position:fixed;right:16px;top:50%;transform:translateY(-50%);
+      display:flex;flex-direction:column;gap:10px;z-index:25;user-select:none;
+      padding:10px;
+      border-radius:999px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(12px);
     }
+    :root[data-theme="light"] .dots{ background: rgba(255,255,255,.55); }
     .dot{
       width:10px;height:10px;border-radius:999px;border:1px solid var(--border);
-      background: rgba(255,255,255,.08);
-      cursor:pointer;
+      background: rgba(255,255,255,.10);
+      cursor:pointer;transition:.15s
     }
-    .dot.active{background:rgba(124,58,237,.85);border-color:rgba(124,58,237,.9);transform:scale(1.25)}
+    :root[data-theme="light"] .dot{background: rgba(2,6,23,.08);}
+    .dot.active{
+      background: rgba(45,212,191,.95);
+      border-color: rgba(45,212,191,.95);
+      transform:scale(1.25)
+    }
 
-    .fab{position:fixed;right:16px;bottom:16px;z-index:30}
+    .fab{
+      position:fixed;right:16px;bottom:16px;z-index:30;display:flex;gap:10px;flex-direction:column;
+    }
     .fab button{
-      border:none;border-radius:999px;padding:12px 14px;cursor:pointer;font-weight:950;color:#fff;
-      background:linear-gradient(135deg,var(--primary),var(--primary2));
-      box-shadow:0 14px 40px rgba(124,58,237,.22);
+      border:none;border-radius:999px;padding:12px 14px;cursor:pointer;font-weight:980;color:#021018;
+      background:linear-gradient(135deg, rgba(45,212,191,.95), rgba(96,165,250,.95));
+      box-shadow:0 18px 55px rgba(45,212,191,.18);transition:.18s;
       display:flex;align-items:center;gap:8px;
     }
+    :root[data-theme="light"] .fab button{ color:#062034; }
+    .fab button:hover{transform:translateY(-2px);box-shadow:0 22px 70px rgba(45,212,191,.24)}
 
-    .mask{position:fixed;inset:0;background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;z-index:40;padding:18px}
+    .mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:40;padding:18px}
+    :root[data-theme="light"] .mask{background:rgba(2,6,23,.18)}
     .modal{
-      width:100%;max-width:560px;background: var(--panel);
+      width:100%;max-width:620px;background: var(--panel);
       border:1px solid var(--border);border-radius:18px;box-shadow: var(--shadow);
-      backdrop-filter:blur(18px);overflow:hidden;
+      backdrop-filter:blur(20px);overflow:hidden;
     }
-    .modal header{display:flex;align-items:center;justify-content:space-between;padding:14px;border-bottom:1px solid var(--border)}
-    .modal header h3{font-size:1.03rem;color:var(--text);font-weight:950}
-    .close{border:1px solid var(--border);background: var(--panel2);color:var(--text);border-radius:10px;padding:8px 10px;cursor:pointer;font-weight:950}
+    .modal header{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:14px 14px;border-bottom:1px solid var(--border)
+    }
+    .modal header h3{font-size:1.03rem;color:var(--text);font-weight:980}
+    .close{
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color:var(--text);
+      border-radius:12px;
+      padding:8px 10px;
+      cursor:pointer;
+      font-weight:980
+    }
+    :root[data-theme="light"] .close{ background: rgba(2,6,23,.04); }
     .modal .body{padding:14px}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     .field{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
-    label{color:var(--muted);font-size:.88rem;font-weight:950}
+    label{color:var(--muted);font-size:.88rem;font-weight:980}
     select,input{
-      padding:12px;border-radius:12px;border:1px solid var(--border);
-      background: var(--panel2);color:var(--text);font-size:.96rem;outline:none;
+      padding:12px 12px;border-radius:14px;border:1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color:var(--text);
+      font-size:.96rem;outline:none;
+      transition:.18s;
     }
+    /* Fix: dark mode native select dropdown */
+select option,
+select optgroup {
+  background: #0b1220;   /* 下拉背景（暗色） */
+  color: rgba(255,255,255,.92); /* 字体颜色 */
+}
+
+/* light mode dropdown (optional,让亮色更统一) */
+:root[data-theme="light"] select option,
+:root[data-theme="light"] select optgroup {
+  background: #ffffff;
+  color: rgba(10,16,32,.92);
+}
+
+/* 让浏览器的表单控件默认按主题渲染（对部分浏览器有帮助） */
+:root { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+
+    :root[data-theme="light"] select,:root[data-theme="light"] input{ background: rgba(2,6,23,.03); }
+    select:focus,input:focus{box-shadow: var(--glow); border-color: rgba(45,212,191,.40);}
+
     .modal footer{display:flex;justify-content:flex-end;gap:10px;padding:12px 14px;border-top:1px solid var(--border)}
-    .btn{border:none;border-radius:12px;padding:11px 14px;cursor:pointer;font-weight:950}
-    .btn.secondary{background: var(--panel2);border:1px solid var(--border);color:var(--text)}
-    .btn.primary{background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff}
+    .btn{
+      border:none;border-radius:14px;padding:11px 14px;cursor:pointer;font-weight:980;transition:.15s
+    }
+    .btn.secondary{background: rgba(255,255,255,.06);border:1px solid var(--border);color:var(--text)}
+    :root[data-theme="light"] .btn.secondary{ background: rgba(2,6,23,.04); }
+    .btn.primary{
+      background:linear-gradient(135deg, rgba(45,212,191,.95), rgba(96,165,250,.95));
+      color:#021018;
+      box-shadow:0 14px 34px rgba(45,212,191,.16)
+    }
+    :root[data-theme="light"] .btn.primary{ color:#062034; }
+    .btn.primary:hover{transform:translateY(-1px)}
+
+    .catlist{display:flex;flex-direction:column;gap:10px}
+    .catitem{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      padding:12px 12px;border-radius:16px;
+      background: rgba(255,255,255,.04);
+      border:1px solid var(--border);
+      cursor:grab;
+    }
+    :root[data-theme="light"] .catitem{ background: rgba(2,6,23,.03); }
+    .catitem:active{cursor:grabbing}
+    .catname{font-weight:980;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .catops{display:flex;align-items:center;gap:8px}
+    .renamebtn,.deletebtn{
+      width:34px;height:34px;border-radius:14px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      cursor:pointer;
+      font-weight:980;
+      display:flex;align-items:center;justify-content:center;
+      transition:.15s;
+    }
+    :root[data-theme="light"] .renamebtn,:root[data-theme="light"] .deletebtn{ background: rgba(2,6,23,.04); }
+    .renamebtn:hover{border-color:rgba(45,212,191,.28)}
+    .deletebtn:hover{border-color:rgba(251,113,133,.45); color: var(--danger)}
+    .dragtag{
+      padding:6px 10px;border-radius:999px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      font-weight:980;font-size:.82rem;
+      user-select:none;
+    }
+    :root[data-theme="light"] .dragtag{background: rgba(2,6,23,.04);}
 
     .toast{
       position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
       background: var(--panel);
       border:1px solid var(--border);
       color: var(--text);
-      padding:10px 12px;border-radius:12px;display:none;z-index:60;
-      box-shadow: 0 14px 40px rgba(0,0,0,.18);font-weight:950;
+      padding:10px 12px;border-radius:14px;display:none;z-index:60;
+      box-shadow: 0 18px 55px rgba(0,0,0,.18);font-weight:980;
+      backdrop-filter: blur(14px);
     }
-    @media (max-width:768px){ .row{grid-template-columns:1fr} }
+
+    @media (max-width:768px){
+      .row{grid-template-columns:1fr}
+      .dots{right:10px}
+      .grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:1rem}
+      .card{padding:1.05rem .95rem}
+      .brand h1{font-size:1.55rem}
+      .searchbar{padding:10px}
+    }
   </style>
 </head>
 <body>
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+
   <div class="topbar" id="topbar">
     <div class="container">
       <div class="header">
@@ -928,9 +1147,11 @@ function renderDashboardPage(data) {
 
   <div class="dots" id="dots"></div>
 
-  <div class="fab"><button id="btnAdd">➕ 添加链接</button></div>
+  <div class="fab">
+    <button id="btnAdd">➕ 添加链接</button>
+  </div>
 
-  <!-- Add/Edit -->
+  <!-- Add/Edit Link Modal -->
   <div class="mask" id="maskLink">
     <div class="modal">
       <header>
@@ -945,12 +1166,22 @@ function renderDashboardPage(data) {
           </div>
           <div class="field">
             <label>新建分类（可选）</label>
-            <input id="newCategory" placeholder="例如：💼 工作 / 🎬 娱乐">
+            <input id="newCategory" placeholder="例如：🎬 娱乐 / 💼 工作">
           </div>
         </div>
-        <div class="field"><label>标题</label><input id="linkTitle" placeholder="例如：Notion / Gmail"></div>
-        <div class="field"><label>URL</label><input id="linkUrl" placeholder="https://example.com"></div>
-        <div class="field"><label>图标（可选）</label><input id="linkIcon" placeholder="留空自动同步 favicon"></div>
+
+        <div class="field">
+          <label>标题</label>
+          <input id="linkTitle" placeholder="例如：Gmail / Notion / 控制台">
+        </div>
+        <div class="field">
+          <label>URL</label>
+          <input id="linkUrl" placeholder="https://example.com">
+        </div>
+        <div class="field">
+          <label>图标（可选）</label>
+          <input id="linkIcon" placeholder="留空自动同步 favicon">
+        </div>
       </div>
       <footer>
         <button class="btn secondary" id="cancelLink">取消</button>
@@ -959,15 +1190,15 @@ function renderDashboardPage(data) {
     </div>
   </div>
 
-  <!-- Category Manager (simple: reorder + rename) -->
+  <!-- Category Manager Modal -->
   <div class="mask" id="maskCats">
     <div class="modal">
       <header>
-        <h3>管理分类（拖拽排序 / 重命名）</h3>
+        <h3>管理分类</h3>
         <button class="close" id="closeCats">关闭</button>
       </header>
       <div class="body">
-        <div id="catlist"></div>
+        <div class="catlist" id="catlist"></div>
       </div>
       <footer>
         <button class="btn secondary" id="cancelCats">取消</button>
@@ -979,28 +1210,36 @@ function renderDashboardPage(data) {
   <div class="toast" id="toast"></div>
 
   <script>
-    // Theme
-    (function(){
-      const saved = localStorage.getItem("nebula_theme");
+    // ----- Theme (light/dark) -----
+    (function initTheme(){
+      const saved = localStorage.getItem("nebula_theme"); // "light" | "dark" | null
       const systemDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
       const theme = saved || (systemDark ? "dark" : "light");
       document.documentElement.dataset.theme = theme;
-      function sync(){
-        const cur = document.documentElement.dataset.theme || "dark";
-        const btn = document.getElementById("btnTheme");
-        if(btn) btn.textContent = cur === "dark" ? "🌙" : "☀️";
-      }
+
       window.__toggleTheme = function(){
         const cur = document.documentElement.dataset.theme || "dark";
         const next = cur === "dark" ? "light" : "dark";
         document.documentElement.dataset.theme = next;
         localStorage.setItem("nebula_theme", next);
-        sync();
+        window.__syncThemeIcon && window.__syncThemeIcon();
       };
-      sync();
+
+      window.__syncThemeIcon = function(){
+        const cur = document.documentElement.dataset.theme || "dark";
+        const btn = document.getElementById("btnTheme");
+        if(btn) btn.textContent = cur === "dark" ? "🌙" : "☀️";
+      };
     })();
 
-    const state = { data: ${safeData}, index: 0, lock:false, lockMs:650, editing:null, catOrder:null };
+    const state = {
+      data: ${safeData},
+      index: 0,
+      lock: false,
+      lockMs: 650,
+      editing: null, // {linkId, categoryId}
+      catOrder: null
+    };
 
     const elSections = document.getElementById("sections");
     const elDots = document.getElementById("dots");
@@ -1024,41 +1263,55 @@ function renderDashboardPage(data) {
       clearTimeout(window.__t);
       window.__t = setTimeout(()=> toastEl.style.display="none", 1800);
     }
-    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
     function escapeAttr(s){ return String(s).replace(/"/g, "&quot;"); }
-    function originFromUrl(u){ try { return new URL(u).origin } catch { return u } }
+
+    function originFromUrl(u){
+      try { return new URL(u).origin } catch { return u }
+    }
 
     function applyTopbarVar(){
       const tb = document.getElementById("topbar");
-      const h = tb ? tb.offsetHeight : 140;
+      const h = tb ? tb.offsetHeight : 144;
       document.documentElement.style.setProperty("--topbar-h", h + "px");
     }
+
     function applyTransform(){
       const sectionEl = document.querySelector(".section");
       const vh = sectionEl ? sectionEl.offsetHeight : (window.innerHeight - 160);
       elSections.style.transform = "translateY(" + (-state.index * vh) + "px)";
       document.querySelectorAll(".dot").forEach((d,i)=>d.classList.toggle("active", i===state.index));
     }
+
     function goTo(i){
       const max = (state.data.categories?.length || 1) - 1;
       state.index = Math.max(0, Math.min(max, i));
       applyTransform();
     }
+
     function wheelHandler(e){
       e.preventDefault();
-      if(state.lock) return;
+      if (state.lock) return;
       state.lock = true;
       setTimeout(()=>state.lock=false, state.lockMs);
+
       const dir = e.deltaY > 0 ? 1 : -1;
       goTo(state.index + dir);
     }
+
     window.addEventListener("resize", ()=>{ applyTopbarVar(); applyTransform(); });
     document.addEventListener("wheel", wheelHandler, { passive:false });
 
     function render(){
       const cats = state.data.categories || [];
+
       elDots.innerHTML = cats.map((_, i)=>\`<div class="dot \${i===state.index?"active":""}" data-i="\${i}"></div>\`).join("");
-      elDots.querySelectorAll(".dot").forEach(d=> d.onclick = ()=> goTo(Number(d.dataset.i)));
+      elDots.querySelectorAll(".dot").forEach(d=>{
+        d.onclick = ()=> goTo(Number(d.dataset.i));
+      });
 
       linkCategory.innerHTML = cats.map(c=>\`<option value="\${escapeAttr(c.id)}">\${escapeHtml(c.name)}</option>\`).join("");
 
@@ -1067,10 +1320,12 @@ function renderDashboardPage(data) {
           const icon = l.icon || "";
           return \`
             <a class="card" href="\${escapeAttr(l.url)}" target="_blank" rel="noopener"
-               draggable="true" data-link-id="\${escapeAttr(l.id)}" data-cat-id="\${escapeAttr(c.id)}">
+               draggable="true"
+               data-link-id="\${escapeAttr(l.id)}"
+               data-cat-id="\${escapeAttr(c.id)}">
               <div class="tools">
-                <div class="mini" data-action="edit" data-link-id="\${escapeAttr(l.id)}">✎</div>
-                <div class="mini d" data-action="del" data-link-id="\${escapeAttr(l.id)}">🗑</div>
+                <div class="mini" title="编辑" data-action="edit" data-link-id="\${escapeAttr(l.id)}">✎</div>
+                <div class="mini d" title="删除" data-action="del" data-link-id="\${escapeAttr(l.id)}">🗑</div>
               </div>
               <div class="favicon"><img src="\${escapeAttr(icon)}" alt=""></div>
               <div class="meta">
@@ -1093,25 +1348,33 @@ function renderDashboardPage(data) {
           </section>\`;
       }).join("");
 
+      wireCardButtons();
+      wireDragDropLinks();
+
+      applyTopbarVar();
+      applyTransform();
+    }
+
+    function wireCardButtons(){
       document.querySelectorAll(".mini").forEach(btn=>{
         btn.addEventListener("click", async (e)=>{
           e.preventDefault(); e.stopPropagation();
           const action = btn.dataset.action;
           const linkId = btn.dataset.linkId;
-          if(action==="edit") openEdit(linkId);
-          if(action==="del"){
-            if(!confirm("确定删除？")) return;
+
+          if(action === "edit") openEdit(linkId);
+          if(action === "del"){
+            if(!confirm("确定删除该链接？")) return;
             await deleteLink(linkId);
           }
         });
       });
-
-      wireDragDropLinks();
-      applyTopbarVar();
-      applyTransform();
     }
 
-    function getCategoryById(catId){ return (state.data.categories||[]).find(c=>c.id===catId); }
+    function getCategoryById(catId){
+      return (state.data.categories || []).find(c=>c.id===catId);
+    }
+
     function findLink(linkId){
       for(const c of (state.data.categories||[])){
         const l = (c.links||[]).find(x=>x.id===linkId);
@@ -1120,7 +1383,7 @@ function renderDashboardPage(data) {
       return null;
     }
 
-    // Add/Edit modal
+    // ---------- Link Modal ----------
     function openAdd(){
       state.editing = null;
       linkModalTitle.textContent = "添加链接";
@@ -1131,24 +1394,28 @@ function renderDashboardPage(data) {
       linkCategory.value = (state.data.categories?.[0]?.id) || "";
       maskLink.style.display = "flex";
     }
+
     function openEdit(linkId){
       const found = findLink(linkId);
       if(!found) return toast("未找到");
       state.editing = { linkId, catId: found.cat.id };
+
       linkModalTitle.textContent = "编辑链接";
       newCategory.value = "";
       linkTitle.value = found.link.title || "";
       linkUrl.value = found.link.url || "";
       linkIcon.value = found.link.icon || "";
       linkCategory.value = found.cat.id;
+
       maskLink.style.display = "flex";
     }
-    function closeLinkModal(){ maskLink.style.display="none"; }
+
+    function closeLinkModal(){ maskLink.style.display = "none"; }
 
     document.getElementById("btnAdd").onclick = openAdd;
     document.getElementById("closeLink").onclick = closeLinkModal;
     document.getElementById("cancelLink").onclick = closeLinkModal;
-    maskLink.addEventListener("click",(e)=>{ if(e.target===maskLink) closeLinkModal(); });
+    maskLink.addEventListener("click", (e)=>{ if(e.target===maskLink) closeLinkModal(); });
 
     document.getElementById("saveLink").onclick = async ()=>{
       const catId = linkCategory.value;
@@ -1156,11 +1423,14 @@ function renderDashboardPage(data) {
       const title = linkTitle.value.trim();
       const url = linkUrl.value.trim();
       const icon = linkIcon.value.trim();
+
       if(!title || !url) return toast("标题/URL 不能为空");
 
       try{
         if(!state.editing){
-          const res = await fetch("/api/links",{method:"POST",headers:{"content-type":"application/json"},
+          const res = await fetch("/api/links",{
+            method:"POST",
+            headers:{ "content-type":"application/json" },
             body: JSON.stringify({ categoryId: catId, categoryName: catName, title, url, icon })
           });
           const out = await res.json();
@@ -1169,9 +1439,15 @@ function renderDashboardPage(data) {
           render();
           closeLinkModal();
           toast("已添加");
-        }else{
-          const res = await fetch("/api/links",{method:"PUT",headers:{"content-type":"application/json"},
-            body: JSON.stringify({ linkId: state.editing.linkId, title, url, icon, moveToCategoryId: catId })
+        } else {
+          const res = await fetch("/api/links",{
+            method:"PUT",
+            headers:{ "content-type":"application/json" },
+            body: JSON.stringify({
+              linkId: state.editing.linkId,
+              title, url, icon,
+              moveToCategoryId: catId
+            })
           });
           const out = await res.json();
           if(!res.ok) return toast(out?.error || "失败");
@@ -1180,12 +1456,16 @@ function renderDashboardPage(data) {
           closeLinkModal();
           toast("已更新");
         }
-      }catch(e){ toast("网络错误"); }
+      }catch(e){
+        toast("网络错误");
+      }
     };
 
     async function deleteLink(linkId){
       try{
-        const res = await fetch("/api/links",{method:"DELETE",headers:{"content-type":"application/json"},
+        const res = await fetch("/api/links",{
+          method:"DELETE",
+          headers:{ "content-type":"application/json" },
           body: JSON.stringify({ linkId })
         });
         const out = await res.json();
@@ -1193,32 +1473,54 @@ function renderDashboardPage(data) {
         state.data = out.data;
         render();
         toast("已删除");
-      }catch(e){ toast("网络错误"); }
+      }catch(e){
+        toast("网络错误");
+      }
     }
 
-    // Drag/drop links
+    // ---------- Drag & Drop Links ----------
     function wireDragDropLinks(){
       const cards = document.querySelectorAll(".card[draggable='true']");
       const grids = document.querySelectorAll(".grid");
-      let drag = null;
+
+      let drag = null; // {linkId, fromCatId}
 
       cards.forEach(card=>{
         card.addEventListener("dragstart", (e)=>{
           drag = { linkId: card.dataset.linkId, fromCatId: card.dataset.catId };
           card.classList.add("dragging");
           e.dataTransfer.effectAllowed = "move";
+          try { e.dataTransfer.setData("text/plain", drag.linkId); } catch {}
         });
+
         card.addEventListener("dragend", ()=>{
           card.classList.remove("dragging");
+          document.querySelectorAll(".drop-hint").forEach(x=>x.classList.remove("drop-hint"));
           drag = null;
         });
 
-        card.addEventListener("dragover", (e)=>{ if(!drag) return; e.preventDefault(); });
+        card.addEventListener("dragenter", ()=>{
+          if(!drag) return;
+          card.classList.add("drop-hint");
+        });
+        card.addEventListener("dragleave", ()=>{
+          card.classList.remove("drop-hint");
+        });
+
+        card.addEventListener("dragover", (e)=>{
+          if(!drag) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        });
+
         card.addEventListener("drop", async (e)=>{
           if(!drag) return;
           e.preventDefault();
+          card.classList.remove("drop-hint");
+
           const toCatId = card.dataset.catId;
           const targetLinkId = card.dataset.linkId;
+
           reorderByDrop(drag.linkId, drag.fromCatId, toCatId, targetLinkId);
           render();
           await persistReorder();
@@ -1227,7 +1529,12 @@ function renderDashboardPage(data) {
       });
 
       grids.forEach(grid=>{
-        grid.addEventListener("dragover",(e)=>{ if(!drag) return; e.preventDefault(); });
+        grid.addEventListener("dragover", (e)=>{
+          if(!drag) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        });
+
         grid.addEventListener("drop", async (e)=>{
           if(!drag) return;
           e.preventDefault();
@@ -1244,97 +1551,206 @@ function renderDashboardPage(data) {
       const from = getCategoryById(fromCatId);
       const to = getCategoryById(toCatId);
       if(!from || !to) return;
+
       const idx = from.links.findIndex(l=>l.id===linkId);
-      if(idx<0) return;
-      const [item] = from.links.splice(idx,1);
+      if(idx < 0) return;
+
+      const [item] = from.links.splice(idx, 1);
+
       if(beforeLinkId){
         const bi = to.links.findIndex(l=>l.id===beforeLinkId);
-        if(bi>=0){ to.links.splice(bi,0,item); return; }
+        if(bi >= 0) { to.links.splice(bi, 0, item); return; }
       }
       to.links.push(item);
     }
 
     async function persistReorder(){
       const payload = {
-        data:{ categories:(state.data.categories||[]).map(c=>({id:c.id, links:(c.links||[]).map(l=>({id:l.id}))})) }
+        data: {
+          categories: (state.data.categories||[]).map(c=>({
+            id: c.id,
+            links: (c.links||[]).map(l=>({id:l.id}))
+          }))
+        }
       };
       try{
-        const res = await fetch("/api/reorder",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});
+        const res = await fetch("/api/reorder",{
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify(payload)
+        });
         const out = await res.json();
         if(!res.ok) return toast(out?.error || "保存失败");
         state.data = out.data;
-      }catch(e){ toast("网络错误"); }
+      }catch(e){
+        toast("网络错误");
+      }
     }
 
-    // Category manager (simple)
+    // ---------- Category Manager ----------
+    const btnManage = document.getElementById("btnManage");
     const catlist = document.getElementById("catlist");
 
-    document.getElementById("btnManage").onclick = ()=>{
+    function openCats(){
       state.catOrder = (state.data.categories||[]).map(c=>c.id);
-      renderCats();
-      maskCats.style.display="flex";
-    };
-    function closeCats(){ maskCats.style.display="none"; state.catOrder=null; }
+      renderCatList();
+      maskCats.style.display = "flex";
+    }
+    function closeCats(){
+      maskCats.style.display = "none";
+      state.catOrder = null;
+    }
+
+    btnManage.onclick = openCats;
     document.getElementById("closeCats").onclick = closeCats;
     document.getElementById("cancelCats").onclick = closeCats;
     maskCats.addEventListener("click",(e)=>{ if(e.target===maskCats) closeCats(); });
 
-    function renderCats(){
+    function renderCatList(){
       const cats = state.data.categories || [];
       const order = state.catOrder || cats.map(c=>c.id);
-      const orderedCats = order.map(id=>cats.find(c=>c.id===id)).filter(Boolean);
+      const orderedCats = order.map(id => cats.find(c=>c.id===id)).filter(Boolean);
 
       catlist.innerHTML = orderedCats.map(c=>\`
-        <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;
-                    padding:12px;border:1px solid var(--border);border-radius:14px;
-                    background:var(--panel2);margin-bottom:10px;cursor:grab;"
-             draggable="true" data-cid="\${escapeAttr(c.id)}">
-          <div style="font-weight:950;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${escapeHtml(c.name)}</div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <button class="mini" title="重命名" data-rename="\${escapeAttr(c.id)}">✎</button>
-            <span style="color:var(--muted);font-weight:950;font-size:.82rem">拖动</span>
+        <div class="catitem" draggable="true" data-cid="\${escapeAttr(c.id)}">
+          <div class="catname">\${escapeHtml(c.name)}</div>
+          <div class="catops">
+            <button class="renamebtn" title="重命名" data-rename="\${escapeAttr(c.id)}">✎</button>
+            <button class="deletebtn" title="删除分类（链接会转移）" data-delete="\${escapeAttr(c.id)}">🗑</button>
+            <span class="dragtag">拖动</span>
           </div>
         </div>
       \`).join("");
 
-      // rename
-      catlist.querySelectorAll("[data-rename]").forEach(btn=>{
-        btn.onclick = async (e)=>{
-          e.preventDefault(); e.stopPropagation();
-          const cid = btn.dataset.rename;
-          const cat = (state.data.categories||[]).find(x=>x.id===cid);
-          if(!cat) return;
-          const name = prompt("新的分类名称：", cat.name);
-          if(!name) return;
-          const res = await fetch("/api/categories/rename",{method:"POST",headers:{"content-type":"application/json"},
-            body: JSON.stringify({ categoryId: cid, newName: name.trim() })
-          });
-          const out = await res.json();
-          if(!res.ok) return toast(out?.error || "失败");
-          state.data = out.data;
-          renderCats(); render();
-          toast("已重命名");
-        };
-      });
+      wireCatDnD();
+      wireCatRename();
+      wireCatDelete();
+    }
 
-      // drag order
-      const items = catlist.querySelectorAll("[draggable='true']");
+    function wireCatRename(){
+      document.querySelectorAll("[data-rename]").forEach(btn=>{
+        btn.addEventListener("click", async (e)=>{
+          e.preventDefault();
+          e.stopPropagation();
+          const cid = btn.dataset.rename;
+          const cat = (state.data.categories||[]).find(c=>c.id===cid);
+          if(!cat) return;
+
+          const name = prompt("新的分类名称：", cat.name || "");
+          if(!name) return;
+
+          await renameCategory(cid, name.trim());
+        });
+      });
+    }
+
+    async function renameCategory(categoryId, newName){
+      try{
+        const res = await fetch("/api/categories/rename",{
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ categoryId, newName })
+        });
+        const out = await res.json();
+        if(!res.ok) return toast(out?.error || "失败");
+        state.data = out.data;
+        renderCatList();
+        render();
+        toast("已重命名");
+      }catch(e){
+        toast("网络错误");
+      }
+    }
+
+    function wireCatDelete(){
+      document.querySelectorAll("[data-delete]").forEach(btn=>{
+        btn.addEventListener("click", async (e)=>{
+          e.preventDefault();
+          e.stopPropagation();
+          const cid = btn.dataset.delete;
+
+          const cats = state.data.categories || [];
+          const cat = cats.find(c=>c.id===cid);
+          if(!cat) return;
+
+          if(cats.length <= 1) return toast("至少保留 1 个分类");
+
+          const ok = confirm(\`确定删除分类「\${cat.name}」？\\n该分类内链接将自动转移到其它分类。\`);
+          if(!ok) return;
+
+          await deleteCategory(cid);
+        });
+      });
+    }
+
+    async function deleteCategory(categoryId){
+      try{
+        const res = await fetch("/api/categories/delete",{
+          method:"POST",
+          headers:{ "content-type":"application/json" },
+          body: JSON.stringify({ categoryId })
+        });
+        const out = await res.json();
+        if(!res.ok) return toast(out?.error || "删除失败");
+
+        state.data = out.data;
+
+        if(state.catOrder) state.catOrder = state.catOrder.filter(id=>id!==categoryId);
+
+        const max = (state.data.categories?.length || 1) - 1;
+        if(state.index > max) state.index = max;
+
+        renderCatList();
+        render();
+        toast("已删除（链接已转移）");
+      }catch(e){
+        toast("网络错误");
+      }
+    }
+
+    function wireCatDnD(){
+      const items = catlist.querySelectorAll(".catitem");
       let draggingId = null;
+
       items.forEach(it=>{
-        it.addEventListener("dragstart", ()=> draggingId = it.dataset.cid );
-        it.addEventListener("dragover",(e)=>{ if(!draggingId) return; e.preventDefault(); });
+        it.addEventListener("dragstart", ()=>{
+          draggingId = it.dataset.cid;
+          it.classList.add("dragging");
+        });
+        it.addEventListener("dragend", ()=>{
+          draggingId = null;
+          it.classList.remove("dragging");
+          items.forEach(x=>x.classList.remove("drop-hint"));
+        });
+        it.addEventListener("dragover",(e)=>{
+          if(!draggingId) return;
+          e.preventDefault();
+        });
+        it.addEventListener("dragenter", ()=>{
+          if(!draggingId) return;
+          it.classList.add("drop-hint");
+        });
+        it.addEventListener("dragleave", ()=> it.classList.remove("drop-hint"));
         it.addEventListener("drop",(e)=>{
           if(!draggingId) return;
           e.preventDefault();
+          it.classList.remove("drop-hint");
           const targetId = it.dataset.cid;
-          const arr = state.catOrder;
-          const from = arr.indexOf(draggingId);
-          arr.splice(from,1);
-          const to = arr.indexOf(targetId);
-          arr.splice(to,0,draggingId);
-          renderCats();
+          reorderCategoryIds(draggingId, targetId);
+          renderCatList();
         });
       });
+    }
+
+    function reorderCategoryIds(dragId, beforeId){
+      const arr = state.catOrder || [];
+      const from = arr.indexOf(dragId);
+      if(from<0) return;
+      arr.splice(from,1);
+      const to = arr.indexOf(beforeId);
+      if(to<0) { arr.push(dragId); return; }
+      arr.splice(to,0,dragId);
+      state.catOrder = arr;
     }
 
     document.getElementById("saveCats").onclick = async ()=>{
@@ -1344,13 +1760,15 @@ function renderDashboardPage(data) {
       const nextCats = order.map(id=>byId.get(id)).filter(Boolean);
       for(const c of cats) if(!nextCats.some(x=>x.id===c.id)) nextCats.push(c);
       state.data.categories = nextCats;
+
       closeCats();
       render();
       await persistReorder();
       toast("已保存");
     };
 
-    // init
+    // ---------- init ----------
+    window.__syncThemeIcon && window.__syncThemeIcon();
     applyTopbarVar();
     render();
   </script>
